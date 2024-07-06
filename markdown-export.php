@@ -1,4 +1,14 @@
 <?php
+/**
+ * Exports WordPress posts, pages, and evans_movies to Markdown, with frontmatter set up 
+ * for Eleventy.
+ *
+ * Usage: wp eval-file markdown-export.php.
+ *
+ * Version: 1.0.0
+ *
+ * @package md-export
+ */
 
 require 'vendor/autoload.php';
 use League\HTMLToMarkdown\HtmlConverter;
@@ -17,18 +27,80 @@ foreach ( $posts as $p ) {
 	echo "done.\n";
 }
 
-
-function sort_by_post_type( $a, $b ) {
-	return strcmp( $a->post_type, $b->post_type );
-}
-
+/**
+ * Processes the posts.
+ *
+ * @since 1.0.0
+ *
+ * @param WP_Post $p The current post.
+ */
 function process_post( $p ) {
-	return;
-}
-function process_page( $p ) {
-	return;
+	$content     = '';
+	$frontmatter = [
+		'title'     => get_the_title( $p->ID ),
+		'permalink' => strip_host( get_permalink( $p->ID ) ),
+		'date'      => date( 'Y-m-d g:i:s a', strtotime( $p->post_date_gmt ) ),
+		'excerpt'      => get_the_excerpt( $p->ID ),
+		'featured_img' => featured_image( $p->ID ),
+		'tags'      => [ 'post', 'article', 'news' ],
+		'layout'    => 'article',
+		'all_meta'  => dedup_meta( get_post_meta( $p->ID ) ),
+	];
+	$content .= frontmatter( $frontmatter );
+	$content .= "\n";
+	$content .= degutenberg( $p->post_content );
+
+	$dir = './article/' . date( 'Y/m/d', strtotime( $p->post_date_gmt ) );
+
+	if ( ! file_exists( $dir ) ) {
+		mkdir( $dir, 0775, true );
+	}
+	$md = fopen( $dir . '/' . $p->post_name . '.md', 'w' );
+	fwrite( $md, $content );
+	fclose( $md );
+
 }
 
+/**
+ * Processes the pages.
+ *
+ * @since 1.0.0
+ *
+ * @param WP_Post $p The current page.
+ */
+function process_page( $p ) {
+	$content     = '';
+	$frontmatter = [
+		'title'     => get_the_title( $p->ID ),
+		'permalink' => strip_host( get_permalink( $p->ID ) ),
+		'date'      => date( 'Y-m-d g:i:s a', strtotime( $p->post_date_gmt ) ),
+		'excerpt'      => get_the_excerpt( $p->ID ),
+		'featured_img' => featured_image( $p->ID ),
+		'tags'      => ['page'],
+		'layout'    => 'page',
+		'all_meta'  => dedup_meta( get_post_meta( $p->ID ) ),
+	];
+	$content .= frontmatter( $frontmatter );
+	$content .= "\n";
+	$content .= degutenberg( $p->post_content );
+
+	$dir = './page'; 
+
+	if ( ! file_exists( $dir ) ) {
+		mkdir( $dir, 0775, true );
+	}
+	$md = fopen( $dir . '/' . $p->post_name . '.md', 'w' );
+	fwrite( $md, $content );
+	fclose( $md );
+}
+
+/**
+ * Processes the movies.
+ *
+ * @since 1.0.0
+ *
+ * @param WP_Post $p The current post (evans_movie post type).
+ */
 function process_evans_movie( $p ) {
 	// Gets the show year.
 	$showtime = get_post_meta( $p->ID, '_evans_showtime' );
@@ -73,9 +145,7 @@ function process_evans_movie( $p ) {
 		// In case we missed something.
 		'all_meta'     => dedup_meta( get_post_meta( $p->ID ) ),
 	];
-	$yaml = yaml_emit( $frontmatter );
-	// Converts ending '...' to '---'.
-	$yaml = str_replace( "\n...\n", "\n---\n", $yaml );
+	$yaml = frontmatter( $frontmatter );
 	fwrite( $md, $yaml );
 	// Line break.
 	fwrite( $md, "\n" );
@@ -84,6 +154,14 @@ function process_evans_movie( $p ) {
 
 }
 
+/**
+ * Tries to get the movie showtime sorted out.
+ *
+ * @since 1.0.0
+ *
+ * @param  mixed $data Probably an array, might be a string.
+ * @return array       The fixed-up array of showtimes.
+ */
 function fix_showtime( $data ) {
 	if ( ! is_array( $data ) ) {
 		$data = [ $data ];
@@ -101,6 +179,14 @@ function fix_showtime( $data ) {
 	return $data;
 }
 
+/**
+ * Formats the showtimes as Eleventy will expect.
+ *
+ * @since 1.0.0
+ *
+ * @param  array $data The showtimes.
+ * @return array       The formatted showtimes.
+ */
 function format_showtimes( $data ) {
 	foreach ( $data as $key => $date ) {
 		$data[ $key ] = date( 'Y-m-d g:i:s a', $date );
@@ -108,10 +194,24 @@ function format_showtimes( $data ) {
 	return $data;
 }
 
+/**
+ * Strips the host from URLs, for use in Eleventy.
+ *
+ * @param  string $url The URL.
+ * @return string      The URL sans the hostname.
+ */
 function strip_host( $url ) {
 	return preg_replace( '|https?://[^/]+/|', '/', $url );
 }
 
+/**
+ * Regularizes the formatting of the Evans rating data.
+ *
+ * @since 1.0.0
+ *
+ * @param  int $id The post ID.
+ * @return array   The rating data.
+ */
 function evans_rating( $id ) {
 	$_rating = get_post_meta( $id, '_evans_rating', true );
 	$rating  = [];
@@ -122,11 +222,37 @@ function evans_rating( $id ) {
 	return $rating;
 }
 
+
+/**
+ * Deduplicates the post meta.
+ *
+ * Some posts (at least on my local) have a lot of doubled and tripled meta data; this
+ * function ensures that the metadata is unique.
+ *
+ * @since 1.0.0
+ *
+ * @param  array $data The metadata.
+ * @return array       The de-duplicated metadata.
+ */
 function dedup_meta( $data ) {
 	foreach ( $data as $key => $item ) {
 		$data[ $key ] = array_unique( $item );
 	}
 	return $data;
+}
+
+/**
+ * Converts an array of frontmatter to YAML.
+ *
+ * @since 1.0.0
+ *
+ * @param  array $data The array of frontmatter data.
+ * @return string      The YAML-formatte data.
+ */
+function frontmatter( $data ) {
+	$fm = yaml_emit( $data );
+	$fm = str_replace( "\n...\n", "\n---\n", $fm );
+	return $fm;
 }
 
 /**
@@ -146,6 +272,15 @@ function degutenberg( $html ) {
 	return $converter->convert( $html );
 }
 
+/**
+ * Gets the page's featured image, if one exists.
+ *
+ * @since 1.0.0
+ *
+ * @param  int    $id   The post ID.
+ * @param  string $type The type of URL to provide: 'local' or 'original'.
+ * @return string|bool  The featured image URL, or false.
+ */
 function featured_image( $id, $type = 'local' ) {
 	if ( has_post_thumbnail( $id ) ) {
 		$original_url = get_the_post_thumbnail_url( $id );
@@ -162,6 +297,17 @@ function featured_image( $id, $type = 'local' ) {
 	return false;
 }
 
+/**
+ * Gets the links for the movies.
+ *
+ * Usually this is used for a movie's Official Site link, but others might exist too.
+ * Any given movie may have zero, one, or more links.
+ *
+ * @since 1.0.0
+ *
+ * @param  int $id    The post ID.
+ * @return array|bool Array of links, or false.
+ */
 function get_movie_links( $id ) {
 	$links = get_post_meta( $id, '_evans_url' );
 	if ( empty( $links ) ) {
@@ -170,7 +316,6 @@ function get_movie_links( $id ) {
 	if ( is_array( $links ) ) {
 		$links = array_unique( $links );
 	}
-	print_r( $links );
 	$the_links = [];
 	foreach ( $links as $link ) {
 		if ( ! is_array( $link ) ) {
@@ -179,7 +324,6 @@ function get_movie_links( $id ) {
 			$the_links[] = [ 'url' => $link['_evans_url'], 'text' => $link['_evans_url_name'] ];
 		}
 	}
-	print_r( $the_links );
 	return $the_links;
 
 }
